@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>全球金融指标实时可视化</title>
+  <style>
+    :root {
+      --bg:#0b1020;--panel:#141c33;--text:#e8ecf7;--muted:#9aa7c3;--up:#22c55e;--down:#ef4444;--accent:#60a5fa;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:linear-gradient(180deg,#091024,#0e1730);color:var(--text)}
+    .wrap{max-width:1200px;margin:0 auto;padding:20px}
+    h1{margin:0 0 6px;font-size:28px}
+    .subtitle{color:var(--muted);margin-bottom:18px}
+    .toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:var(--panel);padding:12px 14px;border-radius:12px}
+    select,button{background:#1f2a4a;color:var(--text);border:1px solid #324169;padding:8px 10px;border-radius:8px}
+    button{cursor:pointer}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin-top:14px}
+    .card{background:var(--panel);border-radius:12px;padding:12px;border:1px solid #223157}
+    .name{font-size:13px;color:var(--muted)}
+    .price{font-size:22px;font-weight:700;margin-top:4px}
+    .delta{margin-top:6px;font-size:13px;font-weight:600}
+    .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--muted)}
+    iframe{margin-top:14px;border:0;width:100%;height:560px;border-radius:12px;overflow:hidden}
+    .meta{display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:var(--muted);font-size:13px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>全球金融指标实时可视化</h1>
+    <div class="subtitle">覆盖股指、汇率、国债收益率、大宗商品与加密资产，帮助你快速把握宏观风险偏好。</div>
+
+    <div class="toolbar">
+      <label>图表标的：
+        <select id="symbolSelect"></select>
+      </label>
+      <button id="refreshBtn">立即刷新</button>
+      <span id="status">状态：等待首次加载</span>
+    </div>
+
+    <div id="cards" class="grid"></div>
+
+    <iframe id="tvChart" src="" title="TradingView 图表"></iframe>
+
+    <div class="meta">
+      <span>数据源：Yahoo Finance Quote API（行情卡片）+ TradingView（互动图表）</span>
+      <span id="updatedAt">上次更新：--</span>
+    </div>
+  </div>
+
+  <script>
+    const instruments = [
+      {symbol:'^GSPC', name:'标普500'}, {symbol:'^DJI', name:'道琼斯工业指数'},
+      {symbol:'^IXIC', name:'纳斯达克综合指数'}, {symbol:'^FTSE', name:'富时100'},
+      {symbol:'^GDAXI', name:'德国DAX'}, {symbol:'^N225', name:'日经225'},
+      {symbol:'^HSI', name:'恒生指数'}, {symbol:'000001.SS', name:'上证指数'},
+      {symbol:'EURUSD=X', name:'欧元/美元'}, {symbol:'USDJPY=X', name:'美元/日元'},
+      {symbol:'CL=F', name:'WTI原油'}, {symbol:'GC=F', name:'黄金'},
+      {symbol:'^TNX', name:'美国10Y国债收益率'}, {symbol:'BTC-USD', name:'比特币'}
+    ];
+
+    const select = document.getElementById('symbolSelect');
+    const cards = document.getElementById('cards');
+    const updatedAt = document.getElementById('updatedAt');
+    const status = document.getElementById('status');
+    const tvChart = document.getElementById('tvChart');
+
+    instruments.forEach(item => {
+      const option = document.createElement('option');
+      option.value = item.symbol;
+      option.textContent = `${item.name} (${item.symbol})`;
+      select.appendChild(option);
+    });
+
+    function tvSymbolMap(yahooSymbol) {
+      const m = {
+        '^GSPC':'SP:SPX','^DJI':'DJ:DJI','^IXIC':'NASDAQ:IXIC','^FTSE':'TVC:UKX','^GDAXI':'XETR:DAX',
+        '^N225':'TVC:NI225','^HSI':'HSI:HSI','000001.SS':'SSE:000001','EURUSD=X':'FX:EURUSD',
+        'USDJPY=X':'FX:USDJPY','CL=F':'NYMEX:CL1!','GC=F':'COMEX:GC1!','^TNX':'TVC:US10Y','BTC-USD':'BINANCE:BTCUSDT'
+      };
+      return m[yahooSymbol] || 'SP:SPX';
+    }
+
+    function renderChart(symbol){
+      const tv = tvSymbolMap(symbol);
+      tvChart.src = `https://s.tradingview.com/widgetembed/?frameElementId=tvChart&symbol=${encodeURIComponent(tv)}&interval=60&hidesidetoolbar=1&symboledit=1&saveimage=0&toolbarbg=F1F3F6&theme=dark&style=1&timezone=Asia%2FShanghai&withdateranges=1&hideideas=1`;
+    }
+
+    function cls(v){ if(v>0) return 'up'; if(v<0) return 'down'; return 'flat'; }
+
+    let failCount = 0;
+    let refreshTimer = null;
+
+    function scheduleNextRefresh(){
+      const sec = failCount === 0 ? 60 : Math.min(600, 60 * (2 ** failCount));
+      refreshTimer = setTimeout(loadQuotes, sec * 1000);
+    }
+
+    async function loadQuotes(){
+      const symbols = instruments.map(i=>i.symbol).join(',');
+      status.textContent = '状态：正在拉取行情...';
+      if (refreshTimer) { clearTimeout(refreshTimer); }
+      try {
+        const res = await fetch(`/api/quotes?symbols=${encodeURIComponent(symbols)}`);
+        const data = await res.json();
+        const map = new Map((data.quoteResponse?.result || []).map(x=>[x.symbol,x]));
+        cards.innerHTML = '';
+        instruments.forEach(item => {
+          const q = map.get(item.symbol);
+          const price = q?.regularMarketPrice;
+          const change = q?.regularMarketChange;
+          const pchg = q?.regularMarketChangePercent;
+          const card = document.createElement('div');
+          card.className = 'card';
+          card.innerHTML = `
+            <div class="name">${item.name}</div>
+            <div class="price">${price ?? '--'}</div>
+            <div class="delta ${cls(change || 0)}">${change==null?'--':change.toFixed(2)} (${pchg==null?'--':pchg.toFixed(2)}%)</div>
+          `;
+          cards.appendChild(card);
+        });
+        const t = new Date();
+        updatedAt.textContent = `上次更新：${t.toLocaleString()}`;
+        const stale = Boolean(data?.meta?.stale);
+        if (stale) {
+          failCount = Math.min(failCount + 1, 4);
+          status.textContent = `状态：数据源暂不可用，当前展示${data?.meta?.source === 'cache' ? '缓存' : '空白'}数据`;
+        } else {
+          failCount = 0;
+          status.textContent = '状态：已更新';
+        }
+        scheduleNextRefresh();
+      } catch (err) {
+        failCount = Math.min(failCount + 1, 4);
+        status.textContent = `状态：拉取失败（${err.message}，请确认通过 python app.py 启动）`;
+        scheduleNextRefresh();
+      }
+    }
+
+    select.addEventListener('change', () => renderChart(select.value));
+    document.getElementById('refreshBtn').addEventListener('click', loadQuotes);
+
+    renderChart(instruments[0].symbol);
+    loadQuotes();
+  </script>
+</body>
+</html>
