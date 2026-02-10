@@ -93,7 +93,7 @@
       const symbols = instruments.map(i=>i.symbol).join(',');
       status.textContent = '状态：正在拉取行情...';
       try {
-        const res = await fetch(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}`);
+        const res = await fetch(`/api/quotes?symbols=${encodeURIComponent(symbols)}`);
         const data = await res.json();
         const map = new Map((data.quoteResponse?.result || []).map(x=>[x.symbol,x]));
         cards.innerHTML = '';
@@ -115,7 +115,7 @@
         updatedAt.textContent = `上次更新：${t.toLocaleString()}`;
         status.textContent = '状态：已更新';
       } catch (err) {
-        status.textContent = `状态：拉取失败（${err.message}）`;
+        status.textContent = `状态：拉取失败（${err.message}，请确认通过 python app.py 启动）`;
       }
     }
 
