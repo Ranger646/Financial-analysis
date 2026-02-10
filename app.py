@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 import json
+import time
 import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+
+CACHE = {
+    "body": None,
+    "updated_at": None,
+}
 
 
 class DashboardHandler(SimpleHTTPRequestHandler):
@@ -18,10 +24,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         symbols = query.get("symbols", [""])[0].strip()
 
         if not symbols:
-            self.send_response(400)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": "missing symbols"}).encode("utf-8"))
+            self.send_json(400, {"error": "missing symbols"})
             return
 
         upstream = (
@@ -41,24 +44,43 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
         try:
             with urllib.request.urlopen(req, timeout=12) as resp:
-                body = resp.read()
-                status = resp.status
+                body = json.loads(resp.read().decode("utf-8"))
         except Exception as exc:
-            self.send_response(502)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(
-                json.dumps({"error": "upstream fetch failed", "detail": str(exc)}).encode(
-                    "utf-8"
-                )
+            if CACHE["body"] is not None:
+                cached = dict(CACHE["body"])
+                cached["meta"] = {
+                    "stale": True,
+                    "source": "cache",
+                    "cache_updated_at": CACHE["updated_at"],
+                    "upstream_error": str(exc),
+                }
+                self.send_json(200, cached)
+                return
+
+            self.send_json(
+                200,
+                {
+                    "quoteResponse": {"result": [], "error": None},
+                    "meta": {
+                        "stale": True,
+                        "source": "none",
+                        "upstream_error": str(exc),
+                    },
+                },
             )
             return
 
+        body["meta"] = {"stale": False, "source": "yahoo"}
+        CACHE["body"] = body
+        CACHE["updated_at"] = int(time.time())
+        self.send_json(200, body)
+
+    def send_json(self, status, payload):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(body)
+        self.wfile.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
 
 def run():

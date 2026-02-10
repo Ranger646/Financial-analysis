@@ -89,9 +89,18 @@
 
     function cls(v){ if(v>0) return 'up'; if(v<0) return 'down'; return 'flat'; }
 
+    let failCount = 0;
+    let refreshTimer = null;
+
+    function scheduleNextRefresh(){
+      const sec = failCount === 0 ? 60 : Math.min(600, 60 * (2 ** failCount));
+      refreshTimer = setTimeout(loadQuotes, sec * 1000);
+    }
+
     async function loadQuotes(){
       const symbols = instruments.map(i=>i.symbol).join(',');
       status.textContent = '状态：正在拉取行情...';
+      if (refreshTimer) { clearTimeout(refreshTimer); }
       try {
         const res = await fetch(`/api/quotes?symbols=${encodeURIComponent(symbols)}`);
         const data = await res.json();
@@ -113,9 +122,19 @@
         });
         const t = new Date();
         updatedAt.textContent = `上次更新：${t.toLocaleString()}`;
-        status.textContent = '状态：已更新';
+        const stale = Boolean(data?.meta?.stale);
+        if (stale) {
+          failCount = Math.min(failCount + 1, 4);
+          status.textContent = `状态：数据源暂不可用，当前展示${data?.meta?.source === 'cache' ? '缓存' : '空白'}数据`;
+        } else {
+          failCount = 0;
+          status.textContent = '状态：已更新';
+        }
+        scheduleNextRefresh();
       } catch (err) {
+        failCount = Math.min(failCount + 1, 4);
         status.textContent = `状态：拉取失败（${err.message}，请确认通过 python app.py 启动）`;
+        scheduleNextRefresh();
       }
     }
 
@@ -124,7 +143,6 @@
 
     renderChart(instruments[0].symbol);
     loadQuotes();
-    setInterval(loadQuotes, 60000);
   </script>
 </body>
 </html>
